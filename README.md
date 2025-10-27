@@ -4,7 +4,11 @@ Un proyecto de Python para modelos de tránsito con Inteligencia Artificial.
 
 ## Descripción
 
-Este proyecto implementa modelos de IA para análisis y predicción de tránsito.
+El proyecto está organizado en tres etapas principales, todas implementadas en Python:
+
+1. **Limpieza de datos:** se normalizan nombres de columnas, se eliminan duplicados y se imputan valores faltantes.
+2. **Visualización:** se generan gráficas descriptivas (histogramas, matrices de correlación y series de tiempo) para explorar los datos procesados.
+3. **Entrenamiento con aprendizaje por refuerzo:** se entrena un agente Q-learning sencillo que ajusta un semáforo virtual utilizando las métricas del conjunto de datos.
 
 ## Instalación
 
@@ -31,8 +35,14 @@ pip install -r requirements.txt
 ## Uso
 
 ```bash
-python main.py
+python main.py --input-file tips.csv --metric-column total_bill --plot-prefix demo
 ```
+
+Parámetros opcionales:
+
+- `--input-file`: archivo CSV presente en la carpeta `data/` (por defecto `tips.csv`).
+- `--metric-column`: columna numérica que se utilizará como métrica para el entrenamiento de refuerzo.
+- `--plot-prefix`: prefijo que se añadirá a los archivos PNG generados por la etapa de visualización.
 
 ## Estructura del Proyecto
 
@@ -41,9 +51,11 @@ ModeloTransitoIA/
 │
 ├── src/                 # Código fuente
 │   ├── __init__.py
-│   ├── models/         # Modelos de IA
-│   ├── data/           # Procesamiento de datos
-│   └── utils/          # Utilidades
+│   ├── models/         # Modelos de IA (incluye refuerzo)
+│   ├── data/           # Procesamiento y limpieza de datos
+│   ├── pipeline/       # Orquestación de las tres etapas
+│   ├── utils/          # Utilidades (configuración, logging)
+│   └── visualization/  # Generación de gráficas
 │
 ├── tests/              # Tests unitarios
 ├── data/               # Datos de entrada
