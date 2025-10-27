@@ -1,0 +1,29 @@
+# Comandos para subir a GitHub
+
+# 1. Agregar el repositorio remoto (reemplaza 'TUUSUARIO' con tu usuario de GitHub)
+git remote add origin https://github.com/TUUSUARIO/ModeloTransitoIA.git
+
+# 2. Verificar que se agregó correctamente
+git remote -v
+
+# 3. Cambiar el nombre de la rama principal a 'main' (GitHub usa 'main' por defecto)
+git branch -M main
+
+# 4. Subir los cambios al repositorio remoto
+git push -u origin main
+
+# ==========================================
+# COMANDOS PARA FUTURAS ACTUALIZACIONES
+# ==========================================
+
+# Ver el estado de los cambios
+git status
+
+# Agregar archivos modificados
+git add .
+
+# Hacer commit de los cambios
+git commit -m "Descripción de los cambios"
+
+# Subir los cambios
+git push
