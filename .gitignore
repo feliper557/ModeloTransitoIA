@@ -37,13 +37,12 @@ ENV/
 .ipynb_checkpoints
 *.ipynb_checkpoints/
 
-# Data files
-*.csv
-*.xlsx
-*.json
+# Data files - Permitir archivos en data/
+# *.csv
+# *.xlsx
+# *.json
 *.pkl
 *.pickle
-!data/sample/*.csv
 
 # Models
 models/*.h5
