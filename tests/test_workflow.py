@@ -48,5 +48,8 @@ def test_workflow_runs_three_stages(tmp_path):
     result = workflow.run("sample.csv", metric_column="volumen", plot_prefix="test")
 
     assert result["cleaning_report"]["final_rows"] == 10
-    assert len(result["plots"]) >= 1
+    assert len(result["plots"]) >= 4
     assert result["training"]["episodes"] == workflow.trainer.episodes
+    assert "neural" in result
+    assert len(result["neural"]["models"]) == 2
+    assert result["comparison"]["neural_best"] is not None

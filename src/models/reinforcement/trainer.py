@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import random
+from collections import deque
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -67,29 +69,110 @@ class TrainingResult:
         return np.argmax(self.q_table, axis=1)
 
 
-class TrafficRLTrainer:
-    """Train a Q-learning agent using aggregated traffic intensity samples."""
+class SimpleQNetwork:
+    """Small fully connected network trained with vanilla gradient descent."""
 
     def __init__(
         self,
-        episodes: int = 300,
-        alpha: float = 0.2,
+        input_dim: int,
+        output_dim: int,
+        hidden_units: int = 32,
+        learning_rate: float = 1e-3,
+    ) -> None:
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.hidden_units = hidden_units
+        self.learning_rate = learning_rate
+
+        limit1 = np.sqrt(6.0 / (input_dim + hidden_units))
+        limit2 = np.sqrt(6.0 / (hidden_units + output_dim))
+
+        rng = np.random.default_rng()
+        self.w1 = rng.uniform(-limit1, limit1, size=(input_dim, hidden_units)).astype(np.float32)
+        self.b1 = np.zeros(hidden_units, dtype=np.float32)
+        self.w2 = rng.uniform(-limit2, limit2, size=(hidden_units, output_dim)).astype(np.float32)
+        self.b2 = np.zeros(output_dim, dtype=np.float32)
+
+    def predict(self, states: np.ndarray) -> np.ndarray:
+        _, _, output = self._forward(states)
+        return output
+
+    def train_on_batch(self, states: np.ndarray, targets: np.ndarray) -> None:
+        pre_activations, activations, predictions = self._forward(states)
+
+        batch_size = states.shape[0]
+        error = predictions - targets
+        grad_output = (2.0 / batch_size) * error
+
+        grad_w2 = activations.T @ grad_output
+        grad_b2 = grad_output.sum(axis=0)
+
+        grad_hidden = grad_output @ self.w2.T
+        relu_mask = (pre_activations > 0).astype(np.float32)
+        grad_hidden *= relu_mask
+
+        grad_w1 = states.T @ grad_hidden
+        grad_b1 = grad_hidden.sum(axis=0)
+
+        self.w2 -= self.learning_rate * grad_w2
+        self.b2 -= self.learning_rate * grad_b2
+        self.w1 -= self.learning_rate * grad_w1
+        self.b1 -= self.learning_rate * grad_b1
+
+    def copy_weights_from(self, other: "SimpleQNetwork") -> None:
+        self.w1 = other.w1.copy()
+        self.b1 = other.b1.copy()
+        self.w2 = other.w2.copy()
+        self.b2 = other.b2.copy()
+
+    def clone(self) -> "SimpleQNetwork":
+        clone = SimpleQNetwork(
+            input_dim=self.input_dim,
+            output_dim=self.output_dim,
+            hidden_units=self.hidden_units,
+            learning_rate=self.learning_rate,
+        )
+        clone.copy_weights_from(self)
+        return clone
+
+    def _forward(self, states: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        pre_activation = states @ self.w1 + self.b1
+        activation = np.maximum(pre_activation, 0.0)
+        output = activation @ self.w2 + self.b2
+        return pre_activation, activation, output
+
+
+class TrafficRLTrainer:
+    """Train a DQN agent using aggregated traffic intensity samples."""
+
+    def __init__(
+        self,
+        episodes: int = 120,
         gamma: float = 0.95,
         epsilon: float = 0.3,
         epsilon_decay: float = 0.995,
         epsilon_min: float = 0.05,
         num_bins: int = 10,
         max_steps: int = 50,
+        batch_size: int = 16,
+        learning_rate: float = 1e-3,
+        replay_buffer_size: int = 5000,
+        min_replay_size: int = 64,
+        target_update_frequency: int = 10,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self.episodes = episodes
-        self.alpha = alpha
         self.gamma = gamma
         self.epsilon = epsilon
         self.epsilon_decay = epsilon_decay
         self.epsilon_min = epsilon_min
         self.num_bins = num_bins
         self.max_steps = max_steps
+        self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.replay_buffer_size = replay_buffer_size
+        self.min_replay_size = min_replay_size
+        self.target_update_frequency = target_update_frequency
         self.logger = logger or logging.getLogger(__name__)
 
     def train_from_dataframe(
@@ -115,11 +198,13 @@ class TrafficRLTrainer:
 
     # ------------------------------------------------------------------
     def _train(self, environment: TrafficSignalEnv, metric_column: str) -> TrainingResult:
-        q_table = np.zeros((environment.num_bins, environment.action_size))
-        epsilon = self.epsilon
+        main_network = self._build_network(environment.action_size)
+        target_network = main_network.clone()
 
+        epsilon = self.epsilon
         rewards: List[float] = []
         epsilon_history: List[float] = []
+        replay_buffer: deque[Tuple[int, int, float, int, bool]] = deque(maxlen=self.replay_buffer_size)
 
         for episode in range(self.episodes):
             state = environment.reset()
@@ -127,22 +212,28 @@ class TrafficRLTrainer:
 
             for _ in range(environment.max_steps):
                 if np.random.rand() < epsilon:
-                    action = np.random.randint(environment.action_size)
+                    action = int(np.random.randint(environment.action_size))
                 else:
-                    action = int(np.argmax(q_table[state]))
+                    state_input = self._encode_state(state)
+                    q_values = main_network.predict(state_input)[0]
+                    action = int(np.argmax(q_values))
 
                 next_state, reward, done = environment.step(action)
-
-                best_next_action = np.max(q_table[next_state])
-                q_table[state, action] = (1 - self.alpha) * q_table[state, action] + self.alpha * (
-                    reward + self.gamma * best_next_action
-                )
-
-                state = next_state
                 total_reward += reward
+
+                replay_buffer.append((state, action, reward, next_state, done))
+                state = next_state
+
+                if len(replay_buffer) >= self.min_replay_size:
+                    batch_size = min(self.batch_size, len(replay_buffer))
+                    batch = random.sample(replay_buffer, batch_size)
+                    self._train_batch(batch, main_network, target_network)
 
                 if done:
                     break
+
+            if (episode + 1) % self.target_update_frequency == 0:
+                target_network.copy_weights_from(main_network)
 
             rewards.append(total_reward)
             epsilon = max(epsilon * self.epsilon_decay, self.epsilon_min)
@@ -157,6 +248,9 @@ class TrafficRLTrainer:
                     epsilon,
                 )
 
+        state_identity = np.eye(environment.num_bins, dtype=np.float32)
+        q_table = main_network.predict(state_identity)
+
         return TrainingResult(
             episodes=self.episodes,
             q_table=q_table,
@@ -164,6 +258,42 @@ class TrafficRLTrainer:
             epsilon_history=epsilon_history,
             metric_column=metric_column,
         )
+
+    def _build_network(self, action_size: int) -> SimpleQNetwork:
+        return SimpleQNetwork(
+            input_dim=self.num_bins,
+            output_dim=action_size,
+            hidden_units=32,
+            learning_rate=self.learning_rate,
+        )
+
+    def _encode_state(self, state: int) -> np.ndarray:
+        one_hot = np.zeros((1, self.num_bins), dtype=np.float32)
+        one_hot[0, state] = 1.0
+        return one_hot
+
+    def _train_batch(
+        self,
+        batch: List[Tuple[int, int, float, int, bool]],
+        main_network: SimpleQNetwork,
+        target_network: SimpleQNetwork,
+    ) -> None:
+        states = np.vstack([self._encode_state(transition[0]) for transition in batch])
+        next_states = np.vstack([self._encode_state(transition[3]) for transition in batch])
+        actions = np.array([transition[1] for transition in batch], dtype=np.int64)
+        rewards = np.array([transition[2] for transition in batch], dtype=np.float32)
+        dones = np.array([transition[4] for transition in batch], dtype=bool)
+
+        current_qs = main_network.predict(states)
+        future_qs = target_network.predict(next_states)
+
+        targets = current_qs.copy()
+        max_future_qs = np.max(future_qs, axis=1)
+        targets[np.arange(len(batch)), actions] = rewards + (
+            (1 - dones.astype(np.float32)) * self.gamma * max_future_qs
+        )
+
+        main_network.train_on_batch(states, targets)
 
     def _select_metric_column(self, data: pd.DataFrame, metric_column: Optional[str]) -> str:
         if metric_column and metric_column in data.columns:

@@ -5,12 +5,22 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Sequence, Protocol
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
+class _HasMetrics(Protocol):
+    name: str
+    metrics: dict
+    loss_curve: Sequence[float]
+    y_true: Sequence[float]
+    y_pred: Sequence[float]
+
+
+class _RLResult(Protocol):
+    episode_rewards: Sequence[float]
 
 @dataclass
 class PlotArtifact:
@@ -54,6 +64,29 @@ class TrafficPlotter:
 
         if "fecha" in data.columns:
             artifacts.append(self._plot_time_series(data, prefix=prefix))
+
+        return artifacts
+
+    def create_model_plots(
+        self,
+        neural_models: Sequence[_HasMetrics],
+        rl_result: Optional[_RLResult],
+        prefix: str = "traffic",
+    ) -> List[PlotArtifact]:
+        """Generate plots comparing the three learning approaches."""
+
+        artifacts: List[PlotArtifact] = []
+
+        if neural_models:
+            artifacts.append(self._plot_neural_losses(neural_models, prefix))
+            for model in neural_models:
+                artifacts.append(self._plot_neural_predictions(model, prefix))
+
+        if rl_result:
+            artifacts.append(self._plot_reinforcement_rewards(rl_result, prefix))
+
+        if neural_models and rl_result:
+            artifacts.append(self._plot_model_scoreboard(neural_models, rl_result, prefix))
 
         return artifacts
 
@@ -129,6 +162,108 @@ class TrafficPlotter:
 
         return PlotArtifact(
             description=f"Serie de tiempo para {column}",
+            path=figure_path,
+        )
+
+    # ------------------------------------------------------------------
+    def _plot_neural_losses(
+        self, neural_models: Sequence[_HasMetrics], prefix: str
+    ) -> PlotArtifact:
+        figure_path = self.output_path / f"{prefix}_neural_losses.png"
+
+        plt.figure(figsize=(10, 5))
+        for model in neural_models:
+            if model.loss_curve:
+                plt.plot(model.loss_curve, label=model.name)
+
+        if not plt.gca().has_data():
+            plt.plot([], [])
+
+        plt.title("Curvas de pérdida de las redes neuronales")
+        plt.xlabel("Iteraciones")
+        plt.ylabel("Pérdida")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(figure_path)
+        plt.close()
+
+        return PlotArtifact(
+            description="Curvas de pérdida de redes neuronales",
+            path=figure_path,
+        )
+
+    def _plot_neural_predictions(
+        self, model: _HasMetrics, prefix: str
+    ) -> PlotArtifact:
+        figure_path = self.output_path / f"{prefix}_{model.name}_predicciones.png"
+
+        y_true = list(model.y_true)
+        y_pred = list(model.y_pred)
+        x_axis = list(range(len(y_true)))
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(x_axis, y_true, marker="o", label="Valor real")
+        plt.plot(x_axis, y_pred, marker="x", label="Predicción")
+        plt.title(f"Predicciones vs valores reales - {model.name}")
+        plt.xlabel("Muestras de prueba")
+        plt.ylabel("Valor")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(figure_path)
+        plt.close()
+
+        return PlotArtifact(
+            description=f"Predicciones del modelo {model.name}",
+            path=figure_path,
+        )
+
+    def _plot_reinforcement_rewards(
+        self, result: _RLResult, prefix: str
+    ) -> PlotArtifact:
+        figure_path = self.output_path / f"{prefix}_rl_rewards.png"
+
+        rewards = list(result.episode_rewards)
+        plt.figure(figsize=(10, 5))
+        plt.plot(range(1, len(rewards) + 1), rewards, marker="o", color="#8338ec")
+        plt.title("Recompensa acumulada por episodio (RL)")
+        plt.xlabel("Episodio")
+        plt.ylabel("Recompensa")
+        plt.tight_layout()
+        plt.savefig(figure_path)
+        plt.close()
+
+        return PlotArtifact(
+            description="Recompensas del modelo de refuerzo",
+            path=figure_path,
+        )
+
+    def _plot_model_scoreboard(
+        self, neural_models: Sequence[_HasMetrics], rl_result: _RLResult, prefix: str
+    ) -> PlotArtifact:
+        figure_path = self.output_path / f"{prefix}_comparacion_modelos.png"
+
+        model_names = [model.name for model in neural_models]
+        mse_values = [model.metrics.get("mse", 0.0) for model in neural_models]
+        average_reward = float(sum(rl_result.episode_rewards) / len(rl_result.episode_rewards))
+
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+        axes[0].bar(model_names, mse_values, color="#219ebc")
+        axes[0].set_title("Error cuadrático medio (menor es mejor)")
+        axes[0].set_ylabel("MSE")
+        axes[0].tick_params(axis="x", rotation=20)
+
+        axes[1].bar(["RL"], [average_reward], color="#ffb703")
+        axes[1].set_title("Recompensa media del modelo de refuerzo")
+        axes[1].set_ylabel("Recompensa media")
+
+        plt.suptitle("Comparación de los tres enfoques de modelado")
+        plt.tight_layout()
+        plt.savefig(figure_path)
+        plt.close(fig)
+
+        return PlotArtifact(
+            description="Comparación de métricas entre modelos",
             path=figure_path,
         )
 
