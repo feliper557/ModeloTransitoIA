@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from statistics import fmean
 from typing import Dict, Optional
 
 from src.data.data_cleaner import DataCleaner
 from src.data.data_loader import DataLoader
+from src.models.neural import TrafficNeuralTrainer
 from src.models.reinforcement import TrafficRLTrainer
 from src.utils.config import Config
 from src.utils.logger import setup_logger
@@ -28,7 +30,15 @@ class TrafficWorkflow:
         self.data_loader = DataLoader(data_path=str(self.config.data_path))
         self.cleaner = DataCleaner(logger=self.logger)
         self.plotter = TrafficPlotter(output_path=self.config.output_path, logger=self.logger)
-        self.trainer = TrafficRLTrainer(logger=self.logger)
+        self.trainer = TrafficRLTrainer(
+            episodes=10,
+            max_steps=10,
+            batch_size=16,
+            min_replay_size=16,
+            target_update_frequency=5,
+            logger=self.logger,
+        )
+        self.neural_trainer = TrafficNeuralTrainer(logger=self.logger)
 
     def run(
         self,
@@ -48,7 +58,18 @@ class TrafficWorkflow:
             cleaned_data, metric_column=metric_column
         )
 
+        neural_bundle = self.neural_trainer.train_from_dataframe(
+            cleaned_data, target_column=training_result.metric_column
+        )
+
+        model_artifacts = self.plotter.create_model_plots(
+            neural_bundle.models, training_result, prefix=prefix
+        )
+        plot_artifacts.extend(model_artifacts)
+
         self.logger.info("Flujo completo ejecutado correctamente")
+
+        average_reward = fmean(training_result.episode_rewards)
 
         return {
             "cleaned_data": cleaned_data,
@@ -60,6 +81,13 @@ class TrafficWorkflow:
                 "episode_rewards": training_result.episode_rewards,
                 "epsilon_history": training_result.epsilon_history,
                 "policy": training_result.greedy_policy().tolist(),
+            },
+            "neural": neural_bundle.as_dict(),
+            "comparison": {
+                "neural_best": neural_bundle.best_model().as_dict()
+                if neural_bundle.best_model()
+                else None,
+                "reinforcement_average_reward": average_reward,
             },
         }
 

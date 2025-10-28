@@ -71,6 +71,21 @@ def main() -> None:
     )
     print("Primeros 5 valores de la política aprendida:", result["training"]["policy"][:5])
 
+    if result.get("comparison"):
+        comparison = result["comparison"]
+        best_neural = comparison.get("neural_best")
+        if best_neural:
+            print(
+                "Mejor red neuronal (MSE más bajo):",
+                best_neural["name"],
+                "con MSE =",
+                round(best_neural["metrics"]["mse"], 4),
+            )
+        print(
+            "Recompensa media del modelo de refuerzo:",
+            round(comparison.get("reinforcement_average_reward", 0.0), 3),
+        )
+
 
 if __name__ == "__main__":
     main()
